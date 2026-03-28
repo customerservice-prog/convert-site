@@ -1,19 +1,24 @@
-# YouTube Downloader (FastAPI + Celery)
+# Video Downloading Web Application (MVP)
 
-Single-page UI (`index.html`) talks to a FastAPI backend that queues downloads with **Celery** and **Redis**, fetches media with **yt-dlp**, and merges streams with **FFmpeg**. Completed files live under `./downloads/<task_id>/` and are removed after **1 hour** when you run `cleanup.py` on a schedule.
+Web UI and **FastAPI** backend to fetch video metadata and download merged files (primarily YouTube) using **yt-dlp** and **FFmpeg**. This MVP uses **FastAPI `BackgroundTasks`** (no Celery/Redis) and stores files under `./downloads/<job_id>/`. Run **`cleanup.py`** on a schedule to delete old jobs.
 
-## Flow
+## API
 
-1. **POST /metadata** — video title, thumbnail, duration, and available formats (from yt-dlp).
-2. **POST /download/start** — body: `{ "url", "format_id"? }`; returns `{ "id": "<celery task id>" }`.
-3. **GET /download/status/:id** — poll until `state` is `SUCCESS` or `FAILURE`.
-4. **GET /download/file/:id** — download the merged file when `SUCCESS`.
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/info` | Body: `{ "url" }` → title, thumbnail, duration, formats |
+| `POST` | `/api/jobs` | Body: `{ "url", "format_id" }` → `{ "job_id" }` |
+| `GET` | `/api/jobs/{id}` | `{ "status", "progress" }` — statuses: `queued`, `downloading`, `processing`, `completed`, `failed` |
+| `GET` | `/api/files/{id}` | Download file when `completed` |
 
-## Requirements
+`GET /` serves `index.html`.
 
-- Python 3.10+
-- **Redis** (broker + result backend for Celery)
-- **FFmpeg** on `PATH` (yt-dlp uses it to merge video + audio into MP4)
+## Stack
+
+- Python 3.10+, FastAPI, uvicorn  
+- yt-dlp (downloads + metadata)  
+- FFmpeg on `PATH` (mux to MP4)  
+- Frontend: React (CDN) + Tailwind CSS (CDN), no build step  
 
 ## Setup
 
@@ -23,49 +28,40 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Start **Redis** (default `localhost:6379`).
+Install **FFmpeg** and ensure it is available on your `PATH`.
 
 ## Run
-
-**Terminal 1 — API (port 8000):**
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-**Terminal 2 — Celery worker:**
+Open **http://127.0.0.1:8000/**.
 
-```bash
-celery -A main.celery_app worker --loglevel=info --pool=solo
-```
+For low traffic, background jobs run in the worker process after the response is sent (sync work runs in a thread pool). For horizontal scaling or heavy load, plan a **Phase 2** move to Celery + Redis.
 
-On Windows, `--pool=solo` avoids multiprocessing issues; on Linux you can omit it for better throughput.
-
-**Frontend**
-
-- Open `http://127.0.0.1:8000/` (FastAPI serves `index.html` from the project root), or  
-- From this folder: `python -m http.server 5173` and open `http://127.0.0.1:5173/` — the page uses `http://localhost:8000` as the API when the page is **not** served from port 8000.
-
-## Cleanup (1 hour TTL)
+## Cleanup
 
 ```bash
 python cleanup.py
 ```
 
-Schedule this hourly (Task Scheduler / cron). Override paths or TTL with env vars:
-
-- `DOWNLOAD_DIR` — default `./downloads`
-- `DOWNLOAD_TTL_SECONDS` — default `3600`
+- `DOWNLOAD_DIR` — default `./downloads`  
+- `DOWNLOAD_TTL_SECONDS` — default `3600` (60 minutes)  
 
 ## Environment
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `REDIS_URL` | `redis://localhost:6379/0` | Celery broker + result backend |
-| `DOWNLOAD_DIR` | `./downloads` | Per-task download folders |
-| `CORS_ORIGINS` | `*` | Comma-separated origins for FastAPI CORS |
-| `PORT` | `8000` | Only used by `python main.py` |
+| Variable | Default |
+|----------|---------|
+| `DOWNLOAD_DIR` | `./downloads` |
+| `CORS_ORIGINS` | `*` |
+| `PORT` | `8000` (only when running `python main.py`) |
 
 ## Legal note
 
-Only download content you are allowed to use. Respect YouTube’s Terms of Service and copyright.
+Download only content you are permitted to use. Respect site terms and copyright.
+
+## Roadmap (from spec)
+
+- **Phase 2:** Celery + Redis queue, richer UX  
+- **Phase 3:** Streaming downloads, cloud storage, scale-out  

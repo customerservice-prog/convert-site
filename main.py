@@ -1,6 +1,6 @@
 """
-FastAPI API + Celery workers for YouTube download (yt-dlp + FFmpeg).
-Endpoints: POST /metadata, POST /download/start, GET /download/status/:id, GET /download/file/:id
+Video download API (MVP): FastAPI + BackgroundTasks, yt-dlp + FFmpeg.
+Routes: POST /api/info, POST /api/jobs, GET /api/jobs/{id}, GET /api/files/{id}
 """
 from __future__ import annotations
 
@@ -8,31 +8,25 @@ import json
 import os
 import re
 import shutil
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from celery import Celery, states
-from fastapi import FastAPI, HTTPException
+import yt_dlp
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
-import yt_dlp
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 DOWNLOAD_DIR = Path(os.environ.get("DOWNLOAD_DIR", "./downloads")).resolve()
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-celery_app = Celery("convert_site", broker=REDIS_URL, backend=REDIS_URL)
-celery_app.conf.update(
-    task_track_started=True,
-    result_expires=3600,
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-)
+_jobs_lock = threading.Lock()
+_jobs: dict[str, dict[str, Any]] = {}
 
-app = FastAPI(title="YouTube Downloader API")
+app = FastAPI(title="Video Downloader API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
@@ -42,14 +36,31 @@ app.add_middleware(
 )
 
 
-def _safe_task_dir(task_id: str) -> Path:
-    if not task_id or re.search(r"[./\\]", task_id):
-        raise HTTPException(status_code=400, detail="Invalid task id")
-    d = (DOWNLOAD_DIR / task_id).resolve()
+def _job_update(job_id: str, **kwargs: Any) -> None:
+    with _jobs_lock:
+        if job_id not in _jobs:
+            _jobs[job_id] = {}
+        _jobs[job_id].update(kwargs)
+
+
+def _job_get(job_id: str) -> dict[str, Any] | None:
+    with _jobs_lock:
+        j = _jobs.get(job_id)
+        return dict(j) if j else None
+
+
+def _safe_job_dir(job_id: str) -> Path:
+    if not job_id or re.search(r"[./\\]", job_id):
+        raise HTTPException(status_code=400, detail="Invalid job id")
+    try:
+        uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job id") from None
+    d = (DOWNLOAD_DIR / job_id).resolve()
     try:
         d.relative_to(DOWNLOAD_DIR)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid task id") from None
+        raise HTTPException(status_code=400, detail="Invalid job id") from None
     return d
 
 
@@ -71,36 +82,23 @@ def _find_output_file(task_dir: Path) -> Path | None:
     return None
 
 
-@celery_app.task(bind=True, name="download_video")
-def download_video_task(self, url: str, format_id: str | None) -> dict[str, Any]:
-    task_id = self.request.id
-    if not task_id:
-        raise RuntimeError("Missing Celery task id")
-    task_dir = (DOWNLOAD_DIR / task_id).resolve()
+def _run_download_job(job_id: str, url: str, format_id: str) -> None:
+    task_dir = (DOWNLOAD_DIR / job_id).resolve()
     task_dir.mkdir(parents=True, exist_ok=True)
     _write_meta(task_dir)
 
-    fmt = format_id or "bestvideo+bestaudio/best"
+    fmt = format_id.strip() if format_id else "bestvideo+bestaudio/best"
     out_template = str(task_dir / "output.%(ext)s")
 
     def progress_hook(d: dict[str, Any]) -> None:
         if d["status"] == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             downloaded = d.get("downloaded_bytes") or 0
-            pct = (downloaded / total * 100.0) if total else None
-            self.update_state(
-                state="PROGRESS",
-                meta={
-                    "progress": round(pct, 2) if pct is not None else None,
-                    "message": d.get("_percent_str", "Downloading…"),
-                    "phase": "download",
-                },
-            )
-        elif d["status"] == "finished" and d.get("filename"):
-            self.update_state(
-                state="PROGRESS",
-                meta={"progress": 95.0, "message": "Merging with FFmpeg…", "phase": "merge"},
-            )
+            pct = int((downloaded / total) * 85) if total else 10
+            pct = max(5, min(85, pct))
+            _job_update(job_id, status="downloading", progress=pct)
+        elif d["status"] == "finished":
+            _job_update(job_id, status="processing", progress=90)
 
     ydl_opts: dict[str, Any] = {
         "format": fmt,
@@ -112,34 +110,32 @@ def download_video_task(self, url: str, format_id: str | None) -> dict[str, Any]
         "no_warnings": True,
     }
 
-    self.update_state(
-        state=states.STARTED,
-        meta={"progress": 0.0, "message": "Starting…", "phase": "start"},
-    )
+    _job_update(job_id, status="downloading", progress=1)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except Exception as exc:
         shutil.rmtree(task_dir, ignore_errors=True)
-        self.update_state(state=states.FAILURE, meta={"error": str(exc)})
-        raise
+        _job_update(job_id, status="failed", progress=0, error=str(exc))
+        return
 
     out = _find_output_file(task_dir)
     if not out or not out.is_file():
         shutil.rmtree(task_dir, ignore_errors=True)
-        raise RuntimeError("Download finished but output file was not found")
+        _job_update(job_id, status="failed", progress=0, error="Output file not found after download")
+        return
 
-    return {"filename": out.name, "path": str(out)}
+    _job_update(job_id, status="completed", progress=100, filename=out.name)
 
 
-class MetadataRequest(BaseModel):
+class InfoRequest(BaseModel):
     url: str = Field(..., min_length=1)
 
 
-class DownloadStartRequest(BaseModel):
+class JobCreateRequest(BaseModel):
     url: str = Field(..., min_length=1)
-    format_id: str | None = None
+    format_id: str = Field(default="bestvideo+bestaudio")
 
 
 @app.get("/")
@@ -150,8 +146,8 @@ def serve_index():
     return FileResponse(index_path, media_type="text/html")
 
 
-@app.post("/metadata")
-def metadata(body: MetadataRequest):
+@app.post("/api/info")
+def api_info(body: InfoRequest):
     url = body.url.strip()
     opts: dict[str, Any] = {
         "quiet": True,
@@ -168,123 +164,75 @@ def metadata(body: MetadataRequest):
     if not info:
         raise HTTPException(status_code=400, detail="No metadata returned")
 
-    formats_raw = info.get("formats") or []
     formats_out: list[dict[str, Any]] = []
-    for f in formats_raw:
+    for f in info.get("formats") or []:
         fid = f.get("format_id")
         if not fid:
             continue
         formats_out.append(
             {
                 "format_id": fid,
-                "ext": f.get("ext"),
                 "resolution": f.get("resolution") or f.get("format_note"),
-                "vcodec": f.get("vcodec"),
-                "acodec": f.get("acodec"),
+                "ext": f.get("ext"),
                 "filesize": f.get("filesize") or f.get("filesize_approx"),
-                "format_note": f.get("format_note"),
             }
         )
 
     return {
-        "id": info.get("id"),
         "title": info.get("title"),
         "thumbnail": info.get("thumbnail"),
         "duration": info.get("duration"),
-        "uploader": info.get("uploader"),
-        "webpage_url": info.get("webpage_url") or url,
         "formats": formats_out,
     }
 
 
-@app.post("/download/start")
-def download_start(body: DownloadStartRequest):
-    url = body.url.strip()
-    async_result = download_video_task.delay(url, body.format_id)
-    return {"id": async_result.id}
+@app.post("/api/jobs")
+def api_create_job(body: JobCreateRequest, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    _job_update(
+        job_id,
+        status="queued",
+        progress=0,
+        url=body.url.strip(),
+        format_id=body.format_id,
+        error=None,
+        filename=None,
+    )
+    background_tasks.add_task(
+        _run_download_job,
+        job_id,
+        body.url.strip(),
+        body.format_id,
+    )
+    return {"job_id": job_id}
 
 
-@app.get("/download/status/{task_id}")
-def download_status(task_id: str):
-    _safe_task_dir(task_id)
-    async_result = celery_app.AsyncResult(task_id)
-    state = async_result.state
-    meta = async_result.info if isinstance(async_result.info, dict) else {}
-
-    if state == states.PENDING:
-        return {
-            "state": state,
-            "progress": None,
-            "message": "Queued…",
-            "error": None,
-            "filename": None,
-        }
-    if state == states.STARTED or state == "PROGRESS":
-        return {
-            "state": state,
-            "progress": meta.get("progress"),
-            "message": meta.get("message") or "Working…",
-            "error": None,
-            "filename": None,
-            "phase": meta.get("phase"),
-        }
-    if state == states.SUCCESS:
-        result = async_result.result
-        filename = None
-        if isinstance(result, dict):
-            filename = result.get("filename")
-        task_dir = _safe_task_dir(task_id)
-        out = _find_output_file(task_dir)
-        if out:
-            filename = out.name
-        return {
-            "state": state,
-            "progress": 100.0,
-            "message": "Complete",
-            "error": None,
-            "filename": filename,
-        }
-    if state == states.FAILURE:
-        err = "Task failed"
-        info = async_result.info
-        if isinstance(info, dict):
-            err = str(info.get("error", err))
-        elif info is not None:
-            err = str(info)
-        return JSONResponse(
-            status_code=200,
-            content={
-                "state": state,
-                "progress": None,
-                "message": "Failed",
-                "error": err,
-                "filename": None,
-            },
-        )
-
-    return {
-        "state": state,
-        "progress": meta.get("progress"),
-        "message": meta.get("message"),
-        "error": meta.get("error"),
-        "filename": None,
+@app.get("/api/jobs/{job_id}")
+def api_job_status(job_id: str):
+    _safe_job_dir(job_id)
+    job = _job_get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    out: dict[str, Any] = {
+        "status": job.get("status", "queued"),
+        "progress": int(job.get("progress") or 0),
     }
+    if job.get("error"):
+        out["error"] = job["error"]
+    return out
 
 
-@app.get("/download/file/{task_id}")
-def download_file(task_id: str):
-    task_dir = _safe_task_dir(task_id)
-    async_result = celery_app.AsyncResult(task_id)
-    if async_result.state != states.SUCCESS:
-        raise HTTPException(status_code=409, detail="Download not ready or failed")
+@app.get("/api/files/{job_id}")
+def api_download_file(job_id: str):
+    task_dir = _safe_job_dir(job_id)
+    job = _job_get(job_id)
+    if not job or job.get("status") != "completed":
+        raise HTTPException(status_code=409, detail="File not ready")
     path = _find_output_file(task_dir)
     if not path or not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(
-        path,
-        filename=path.name,
-        media_type="video/mp4",
-    )
+    name = job.get("filename") or path.name
+    return FileResponse(path, filename=name, media_type="video/mp4")
 
 
 if __name__ == "__main__":

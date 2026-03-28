@@ -1,7 +1,6 @@
 """
-Delete download working directories older than TTL (default 1 hour).
-Run on a schedule, e.g. Windows Task Scheduler or cron:
-  python cleanup.py
+Delete download job folders older than TTL (default 60 minutes).
+Schedule with Task Scheduler or cron:  python cleanup.py
 """
 from __future__ import annotations
 
@@ -55,7 +54,7 @@ def main() -> int:
         removed += 1
         print(f"Removed {entry.name}")
 
-    print(f"Cleanup done. Removed {removed} task folder(s).")
+    print(f"Cleanup done. Removed {removed} job folder(s).")
     return 0
 
 
