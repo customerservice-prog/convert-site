@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - app_data:/data
+    environment:
+      APP_ENV: production
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      MAX_CONCURRENT_JOBS_GLOBAL: ${MAX_CONCURRENT_JOBS_GLOBAL:-3}
+      MAX_CONCURRENT_JOBS_PER_IP: ${MAX_CONCURRENT_JOBS_PER_IP:-2}
+      RATE_LIMIT_INFO: ${RATE_LIMIT_INFO:-30/minute}
+      RATE_LIMIT_JOBS: ${RATE_LIMIT_JOBS:-8/hour}
+
+volumes:
+  app_data:
