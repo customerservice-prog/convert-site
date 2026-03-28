@@ -87,7 +87,7 @@ def _run_download_job(job_id: str, url: str, format_id: str) -> None:
     task_dir.mkdir(parents=True, exist_ok=True)
     _write_meta(task_dir)
 
-    fmt = format_id.strip() if format_id else "bestvideo+bestaudio/best"
+    fmt = (format_id.strip() if format_id else "") or "bestvideo+bestaudio/best"
     out_template = str(task_dir / "output.%(ext)s")
 
     def progress_hook(d: dict[str, Any]) -> None:
@@ -135,7 +135,7 @@ class InfoRequest(BaseModel):
 
 class JobCreateRequest(BaseModel):
     url: str = Field(..., min_length=1)
-    format_id: str = Field(default="bestvideo+bestaudio")
+    format_id: str = Field(default="bestvideo+bestaudio/best")
 
 
 @app.get("/")

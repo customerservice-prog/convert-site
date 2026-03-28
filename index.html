@@ -52,7 +52,7 @@
       const [url, setUrl] = useState("");
       const [info, setInfo] = useState(null);
       const [formats, setFormats] = useState([]);
-      const [formatId, setFormatId] = useState("bestvideo+bestaudio");
+      const [formatId, setFormatId] = useState("bestvideo+bestaudio/best");
       const [loadingInfo, setLoadingInfo] = useState(false);
       const [infoError, setInfoError] = useState(null);
 
@@ -100,7 +100,7 @@
             method: "POST",
             body: JSON.stringify({
               url: url.trim(),
-              format_id: formatId || "bestvideo+bestaudio",
+              format_id: formatId || "bestvideo+bestaudio/best",
             }),
           });
           setJobId(data.job_id);
@@ -192,7 +192,7 @@
                 value={formatId}
                 onChange={(e) => setFormatId(e.target.value)}
               >
-                <option value="bestvideo+bestaudio">Best video + audio (recommended)</option>
+                <option value="bestvideo+bestaudio/best">Best video + audio (recommended)</option>
                 {formats.map((f) => (
                   <option key={f.format_id} value={f.format_id}>
                     {[f.format_id, f.resolution, f.ext].filter(Boolean).join(" · ")}
