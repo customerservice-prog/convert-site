@@ -1,8 +1,8 @@
 """URL validation and job id safety."""
 from __future__ import annotations
 
-from services.storage_service import content_disposition_filename, sanitize_filename_stem
-from services.validation import is_safe_job_id, validate_video_url
+from backend.app.services.storage_service import content_disposition_filename, sanitize_filename_stem
+from backend.app.services.validation import is_safe_job_id, validate_video_url
 
 
 def test_youtube_watch_ok():

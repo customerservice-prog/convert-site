@@ -7,9 +7,9 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-import config
-from db import SessionLocal, write_lock
-from models import Job
+from backend.app import config
+from backend.app.db import SessionLocal, write_lock
+from backend.app.models import Job
 
 ACTIVE_STATUSES = ("queued", "downloading", "processing")
 
@@ -94,7 +94,7 @@ def mark_job_completed(
         job_id,
         status="completed",
         progress=100,
-        stage_message="Complete",
+        stage_message="Ready",
         output_path_relative=relative_path,
         output_filename=filename,
         file_size=file_size,

@@ -5,7 +5,7 @@ import re
 import shutil
 from pathlib import Path
 
-import config
+from backend.app import config
 
 
 def downloads_base() -> Path:

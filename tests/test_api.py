@@ -12,6 +12,17 @@ def test_health(client: TestClient):
     assert "checks" in data
 
 
+def test_live(client: TestClient):
+    r = client.get("/live")
+    assert r.status_code == 200
+    assert r.json().get("status") == "live"
+
+
+def test_ready(client: TestClient):
+    r = client.get("/ready")
+    assert r.status_code in (200, 503)
+
+
 def test_info_invalid_url(client: TestClient):
     r = client.post("/api/info", json={"url": "https://example.com/not-youtube"})
     assert r.status_code == 400

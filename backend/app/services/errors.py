@@ -1,4 +1,4 @@
-"""User-safe error codes and messages (no raw stack traces to clients)."""
+"""User-safe error codes and messages."""
 from __future__ import annotations
 
 USER_MESSAGES: dict[str, str] = {

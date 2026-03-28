@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import BigInteger, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from db import Base
+from backend.app.db import Base
 
 
 def _utcnow() -> datetime:
@@ -27,6 +27,7 @@ class Job(Base):
     stage_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
     output_path_relative: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

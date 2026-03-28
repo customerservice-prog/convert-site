@@ -8,7 +8,7 @@ from collections.abc import Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-import config
+from backend.app import config
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,17 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db() -> None:
-    from models import Job  # noqa: F401
+    from sqlalchemy import text
+
+    from backend.app.models import Job  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    if config.DATABASE_URL.startswith("sqlite"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN thumbnail_url TEXT"))
+        except Exception:
+            pass
     logger.info("Database initialized at %s", config.DATABASE_URL)
 
 

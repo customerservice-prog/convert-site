@@ -19,7 +19,7 @@ os.environ.setdefault("RATE_LIMIT_JOBS", "1000/second")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from db import init_db  # noqa: E402
+from backend.app.db import init_db  # noqa: E402
 from main import app  # noqa: E402
 
 

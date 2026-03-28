@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-import config
+from backend.app import config
 
 
 def _normalize_host(netloc: str) -> str:
@@ -27,10 +27,6 @@ def _host_allowed(host: str) -> bool:
 
 
 def validate_video_url(url: str) -> tuple[bool, str | None]:
-    """
-    Returns (ok, error_code).
-    error_code keys match services.errors.USER_MESSAGES.
-    """
     raw = (url or "").strip()
     if len(raw) < 10 or len(raw) > 2048:
         return False, "invalid_url"

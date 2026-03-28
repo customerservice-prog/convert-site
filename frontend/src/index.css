@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gradient-to-b from-slate-950 via-slate-900 to-black text-slate-100 min-h-screen;
+}

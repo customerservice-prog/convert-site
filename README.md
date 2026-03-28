@@ -1,62 +1,81 @@
-# Convert Site — launch-oriented video downloader
+# Convert Site — full product layout
 
-FastAPI backend, React + Tailwind UI (CDN), **yt-dlp** + **FFmpeg**, **SQLite** job persistence, **slowapi** rate limits, disk guards, structured errors, admin listing, Docker, and cleanup automation.
+Production-style layout: **Vite + React + TypeScript + Tailwind** frontend (`frontend/`), modular **FastAPI** backend (`backend/app/`), **SQLite** jobs, **yt-dlp** + **FFmpeg**, rate limits, Docker (multi-stage build), and automated tests (pytest + Vitest).
 
-## v1 product scope (frozen)
+## Repository layout
 
-| Area | Launch decision |
-|------|------------------|
-| Sources | **YouTube** (and short URLs on `youtu.be`) — host allowlist in config |
-| Output | **Video** (muxed MP4) and **audio** (M4A via FFmpeg extract) |
-| Quality | **Best** preset plus per-format IDs from metadata |
-| Accounts | **None** — anonymous use with **IP rate limits** and **concurrency caps** |
-| Storage | **Temporary** only — `FILE_EXPIRY_MINUTES` + `cleanup.py` |
-| Queue | **FastAPI `BackgroundTasks`** (Option A). Upgrade to Celery + Redis if traffic grows. |
-| Max duration / size | `MAX_DURATION_SECONDS` (default 4h), `MAX_FILE_BYTES` (default 3 GiB) |
+```text
+backend/app/          # API package (config, db, models, services, repositories, api/routes)
+frontend/src/         # React UI (components, hooks, pages, services/api.ts)
+main.py               # ASGI entry: re-exports backend.app.main:app
+cleanup.py            # TTL cleanup + DB sync
+legal/                # Terms & privacy HTML
+tests/                # pytest (API + validation)
+```
 
-## API
+## Product scope (v1)
+
+| Area | Decision |
+|------|-----------|
+| Sources | YouTube family URLs (`SUPPORTED_URL_HOSTS`) |
+| Output | Video (MP4) and audio (M4A extract) |
+| UX | Simple presets (Best / 1080p / 720p / Audio) + **Advanced** format list |
+| Storage | Temporary; `cleanup.py` + expiry in DB |
+| Queue | FastAPI `BackgroundTasks` |
+
+## API (high level)
 
 | Method | Path | Notes |
 |--------|------|--------|
-| `GET` | `/health` | DB ping + disk free; `503` if degraded |
-| `POST` | `/api/info` | `{ "url" }` → metadata + formats |
-| `POST` | `/api/jobs` | `{ "url", "format_id", "output_type": "video"\|"audio" }` → `{ "job_id" }` |
-| `GET` | `/api/jobs/{id}` | `status`: `queued` · `downloading` · `processing` · `completed` · `failed` · `expired` |
-| `GET` | `/api/files/{id}` | Streams file; **`410`** if expired |
-| `GET` | `/api/admin/jobs` | Requires header `X-Admin-Key: <ADMIN_API_KEY>` |
-| `GET` | `/legal/terms`, `/legal/privacy` | Static legal pages |
+| `GET` | `/health` | DB + disk; `503` if degraded |
+| `GET` | `/live` | Liveness |
+| `GET` | `/ready` | Readiness (DB) |
+| `POST` | `/api/info` | Normalized metadata: `normalized_choices`, `source_site`, `uploader`, `upload_date`, `duration_label`, capped `formats` for advanced UI |
+| `POST` | `/api/jobs` | Body: `url`, `format_id`, `output_type`, optional `preset_key` (`best` / `p1080` / `p720` / `audio`) |
+| `GET` | `/api/jobs/{id}` | `job_id`, `status_label`, `stage`, `download_url` when complete, `file_size`, `filename`, `thumbnail_url` |
+| `GET` | `/api/files/{id}` | Stream file; `410` if expired |
+| `GET` | `/api/admin/jobs` | `X-Admin-Key` |
 
-Errors often return `{"detail": {"code": "...", "message": "..."}}`.
+## Local development
 
-## Run locally
+**Backend** (from repo root, `PYTHONPATH` must include `.` on some shells):
 
-**Requirements:** Python 3.10+, **FFmpeg** on `PATH`, free disk above `MIN_FREE_DISK_BYTES`.
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
+```powershell
+$env:PYTHONPATH = "."
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000/`. Data lives in `./data/jobs.db` and `./downloads/` by default.
-
-**Cleanup** (schedule every 5–15 minutes):
+**Frontend** (proxies `/api`, `/health`, `/legal` to port 8000):
 
 ```bash
-python cleanup.py
+cd frontend
+npm install
+npm run dev
 ```
 
-## Configuration
+Open **http://127.0.0.1:5173** while the API runs on **8000**.
 
-Copy `.env.example` to `.env` and adjust. Important variables:
+**Single port (production-style):** build the UI then serve only uvicorn:
 
-- `CORS_ALLOWED_ORIGINS` — use explicit origins in production (not `*`).
-- `ADMIN_API_KEY` — set to enable `/api/admin/jobs`.
-- `TRUST_PROXY=1` — only behind a **trusted** reverse proxy so `X-Forwarded-For` is accurate for limits.
-- `RATE_LIMIT_INFO`, `RATE_LIMIT_JOBS` — slowapi strings, e.g. `30/minute`, `8/hour`.
-- `MAX_CONCURRENT_JOBS_GLOBAL`, `MAX_CONCURRENT_JOBS_PER_IP`
-- `SUPPORTED_URL_HOSTS` — comma-separated hostnames
+```bash
+cd frontend && npm run build && cd ..
+$env:PYTHONPATH = "."
+uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+Open **http://127.0.0.1:8000/** — static assets from `frontend/dist/`.
+
+## Tests
+
+```powershell
+$env:PYTHONPATH = "."
+python -m pytest tests -q
+```
+
+```bash
+cd frontend && npm test
+```
 
 ## Docker
 
@@ -64,31 +83,16 @@ Copy `.env.example` to `.env` and adjust. Important variables:
 docker compose up --build
 ```
 
-Persisted volume: `/data` (SQLite + downloads). Install a reverse proxy (Caddy, nginx, Traefik) for HTTPS and set `CORS_ALLOWED_ORIGINS` + `TRUST_PROXY` appropriately.
+The image builds the frontend and copies `frontend/dist` into the Python image. Set `PYTHONPATH=/app` (already in Dockerfile).
 
-## Tests
+## Configuration
 
-```bash
-python -m pytest tests -q
-```
+See `.env.example`. Use explicit `CORS_ALLOWED_ORIGINS` in production. Set `ADMIN_API_KEY` for admin routes. `TRUST_PROXY=1` only behind a trusted reverse proxy.
 
-## Launch checklist (abbreviated)
+## Database note
 
-- [ ] `APP_ENV=production`, strong `SECRET_KEY`, `ADMIN_API_KEY` set
-- [ ] `CORS_ALLOWED_ORIGINS` narrowed; HTTPS terminated at proxy
-- [ ] FFmpeg present in runtime image/host
-- [ ] `cleanup.py` on a schedule; disk alerts configured
-- [ ] `/health` monitored (uptime + 503 rate)
-- [ ] Smoke test: info → job → download → wait for expiry path
-- [ ] Legal pages reachable; support contact documented for your deployment
+If you upgrade from an older DB without `thumbnail_url`, the app attempts a best-effort `ALTER TABLE` on SQLite startup. If issues persist, delete `data/jobs.db` in dev.
 
 ## Legal
 
-Only download content you have the right to use. You are responsible for compliance with YouTube and applicable law. This repository is a technical template; operators must provide their own Terms, Privacy, and abuse policies.
-
-## Upgrades (post-launch)
-
-- **Celery + Redis** for worker isolation and horizontal scale  
-- **Postgres** instead of SQLite for multi-instance APIs  
-- **Object storage** (S3) for large or multi-node file delivery  
-- **CAPTCHA** or auth if abuse continues despite rate limits  
+Only download content you are permitted to use. Operators must supply final Terms/Privacy and support channels.

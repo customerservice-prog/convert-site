@@ -1,6 +1,5 @@
 """
 Remove expired download folders and sync job rows in SQLite.
-Run frequently via cron / Task Scheduler:  python cleanup.py
 """
 from __future__ import annotations
 
@@ -12,16 +11,18 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import config
-from db import SessionLocal, init_db
-from models import Job
+from backend.app import config
+from backend.app.db import SessionLocal, init_db
+from backend.app.models import Job
 from sqlalchemy import select
 
-import services.storage_service as storage
+from backend.app.services import storage_service
 
-DOWNLOAD_DIR = storage.downloads_base()
+DOWNLOAD_DIR = storage_service.downloads_base()
 TTL_SECONDS = int(os.environ.get("DOWNLOAD_TTL_SECONDS", str(config.FILE_EXPIRY_MINUTES * 60)))
-QUEUED_TTL_SECONDS = int(os.environ.get("QUEUED_JOB_TTL_SECONDS", str(config.QUEUED_JOB_TTL_MINUTES * 60)))
+QUEUED_TTL_SECONDS = int(
+    os.environ.get("QUEUED_JOB_TTL_SECONDS", str(config.QUEUED_JOB_TTL_MINUTES * 60))
+)
 
 
 def _parse_started_at(task_dir: Path) -> float | None:
@@ -66,8 +67,7 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        stmt = select(Job)
-        jobs = list(db.scalars(stmt).all())
+        jobs = list(db.scalars(select(Job)).all())
         updated = 0
         for job in jobs:
             if job.status == "completed" and job.expires_at and job.expires_at <= now_dt:

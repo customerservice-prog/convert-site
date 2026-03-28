@@ -10,11 +10,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import config
-from db import SessionLocal, write_lock
-from models import Job
-from services import errors, storage_service, ytdlp_service
-from services.job_repository import mark_job_completed, mark_job_failed, touch_job_started, update_job_fields
+from backend.app import config
+from backend.app.db import SessionLocal, write_lock
+from backend.app.models import Job
+from backend.app.repositories.job_repository import (
+    mark_job_completed,
+    mark_job_failed,
+    touch_job_started,
+    update_job_fields,
+)
+from backend.app.services import errors, storage_service, ytdlp_service
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +97,8 @@ def run_download_job(job_id: str) -> None:
             update_job_fields(
                 job_id,
                 status="processing",
-                progress=90,
-                stage_message="Muxing / encoding…",
+                progress=92,
+                stage_message="Merging audio and video…",
             )
 
     try:
@@ -114,6 +119,8 @@ def run_download_job(job_id: str) -> None:
             internal=str(exc),
         )
         return
+
+    update_job_fields(job_id, status="processing", progress=96, stage_message="Finalizing…")
 
     out = _find_output_file(task_dir, output_type)
     if not out or not out.is_file():

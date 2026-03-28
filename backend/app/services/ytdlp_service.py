@@ -29,21 +29,26 @@ def extract_metadata(url: str) -> dict[str, Any]:
     return info
 
 
-def formats_for_response(info: dict[str, Any]) -> list[dict[str, Any]]:
+def formats_for_response(info: dict[str, Any], limit: int = 48) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for f in info.get("formats") or []:
         fid = f.get("format_id")
         if not fid:
             continue
+        height = f.get("height")
         out.append(
             {
                 "format_id": fid,
                 "resolution": f.get("resolution") or f.get("format_note"),
+                "height": height,
                 "ext": f.get("ext"),
+                "vcodec": f.get("vcodec"),
+                "acodec": f.get("acodec"),
                 "filesize": f.get("filesize") or f.get("filesize_approx"),
             }
         )
-    return out
+    out.sort(key=lambda x: (x.get("height") or 0), reverse=True)
+    return out[:limit]
 
 
 def download_to_dir(
